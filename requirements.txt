@@ -1,0 +1,23 @@
+# Handwriting Recognition to Excel Tool
+# Core dependencies
+
+# Image processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# OCR engines
+pytesseract>=0.3.10
+easyocr>=1.7.0
+
+# Excel export
+openpyxl>=3.1.0
+
+# Image enhancement
+scikit-image>=0.21.0
+
+# CLI interface
+argparse
+
+# Optional: for better table detection
+imutils>=0.5.4

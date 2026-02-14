@@ -33,7 +33,35 @@ brew install tesseract tesseract-lang
 pip install -r requirements.txt
 ```
 
-## Uso
+## Interfaces Visuais
+
+### Interface Web (Streamlit) - Recomendada
+
+```bash
+streamlit run app_web.py
+```
+
+Abre no navegador com:
+- Upload de imagem com arrastar e soltar
+- Barra de progresso em tempo real
+- Pre-visualizacao da tabela reconhecida
+- Botao de download do Excel
+- Configuracoes na barra lateral
+
+### Interface Desktop (Tkinter)
+
+```bash
+python app_desktop.py
+```
+
+Aplicativo nativo com:
+- Seletor de arquivo com preview da imagem
+- Painel de configuracoes integrado
+- Barra de progresso
+- Salvar Excel com dialogo de arquivo
+- Funciona offline, sem navegador
+
+## Linha de Comando
 
 ### Comando básico
 

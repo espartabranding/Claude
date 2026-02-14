@@ -29,6 +29,21 @@ from handwriting_to_excel import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Cache: load OCR engine once, reuse across requests
+# ---------------------------------------------------------------------------
+
+@st.cache_resource(show_spinner="Carregando motores OCR (apenas na primeira vez)...")
+def get_pipeline(engine, languages_tuple, enhance_level, mode):
+    """Cache the pipeline so OCR models are loaded only once."""
+    return HandwritingToExcel(
+        engine=engine,
+        languages=list(languages_tuple),
+        enhance_level=enhance_level,
+        mode=mode,
+    )
+
 # ---------------------------------------------------------------------------
 # Page configuration
 # ---------------------------------------------------------------------------
@@ -315,12 +330,8 @@ with col_result:
 
                     # Step 2: OCR
                     progress.progress(50, text="Reconhecendo texto (OCR)...")
-                    pipeline = HandwritingToExcel(
-                        engine=engine,
-                        languages=languages if languages else ["pt", "en"],
-                        enhance_level=enhance,
-                        mode=mode,
-                    )
+                    langs = tuple(languages) if languages else ("pt", "en")
+                    pipeline = get_pipeline(engine, langs, enhance, mode)
 
                     # Step 3: Full pipeline
                     progress.progress(70, text="Detectando estrutura da tabela...")

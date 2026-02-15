@@ -327,6 +327,176 @@ class GridDetector:
 
 
 # ---------------------------------------------------------------------------
+# Tally Mark Detector - reads Brazilian square-based tally marks
+# ---------------------------------------------------------------------------
+
+class TallyMarkDetector:
+    """Detect Brazilian square-based tally marks (quadradinhos) in cell images.
+
+    Notation system:
+        |       1 side  = 1 unit
+        |_      2 sides (L shape) = 2 units
+        |_|     3 sides (inverted U) = 3 units
+        |_|     4 sides (complete square) = 4 units
+         ‾
+    Multiple squares are summed. E.g.: one complete square + L = 4+2 = 6.
+    """
+
+    def detect(self, cell_img: np.ndarray) -> int | None:
+        """Try to read tally marks from a cell image.
+
+        Returns the count if tally marks detected, None otherwise.
+        """
+        if len(cell_img.shape) == 3:
+            gray = cv2.cvtColor(cell_img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = cell_img.copy()
+
+        h, w = gray.shape
+        if h < 5 or w < 5:
+            return None
+
+        # Binarize (ink = white)
+        _, binary = cv2.threshold(gray, 0, 255,
+                                  cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        # Check if cell has any ink at all
+        ink_ratio = np.sum(binary > 0) / binary.size
+        if ink_ratio < 0.01:
+            return 0  # Empty cell = 0
+        if ink_ratio > 0.5:
+            return None  # Too much ink - probably not tally marks
+
+        # Find connected components (each tally group is one component)
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            binary, connectivity=8
+        )
+
+        total_count = 0
+        valid_groups = 0
+
+        for label_id in range(1, num_labels):  # Skip background (0)
+            comp_x = stats[label_id, cv2.CC_STAT_LEFT]
+            comp_y = stats[label_id, cv2.CC_STAT_TOP]
+            comp_w = stats[label_id, cv2.CC_STAT_WIDTH]
+            comp_h = stats[label_id, cv2.CC_STAT_HEIGHT]
+            comp_area = stats[label_id, cv2.CC_STAT_AREA]
+
+            # Skip tiny noise
+            if comp_area < 15 or comp_w < 3 or comp_h < 3:
+                continue
+
+            # Skip components that are too large relative to cell
+            if comp_w > w * 0.9 and comp_h > h * 0.9:
+                continue
+
+            # Extract this component
+            component_mask = (labels[comp_y:comp_y + comp_h,
+                                     comp_x:comp_x + comp_w] == label_id).astype(np.uint8) * 255
+
+            sides = self._count_sides(component_mask, comp_w, comp_h)
+
+            if sides is not None and 1 <= sides <= 4:
+                total_count += sides
+                valid_groups += 1
+
+        if valid_groups == 0:
+            return None  # No valid tally marks found
+
+        return total_count
+
+    def _count_sides(self, mask: np.ndarray, w: int, h: int) -> int | None:
+        """Count how many sides of a square are drawn in this component.
+
+        Checks the 4 edges of the bounding box for ink presence.
+        """
+        if w < 3 or h < 3:
+            return None
+
+        # Define edge regions (thin strips along each border)
+        strip = max(2, min(w, h) // 5)
+
+        # Top edge: top strip of pixels, middle portion
+        top_region = mask[0:strip, :]
+        # Bottom edge
+        bottom_region = mask[h - strip:h, :]
+        # Left edge
+        left_region = mask[:, 0:strip]
+        # Right edge
+        right_region = mask[:, w - strip:w]
+
+        # Minimum ink threshold for a side to be considered "present"
+        min_fill = 0.15
+
+        sides = 0
+
+        # Check each edge
+        top_fill = np.sum(top_region > 0) / max(top_region.size, 1)
+        bottom_fill = np.sum(bottom_region > 0) / max(bottom_region.size, 1)
+        left_fill = np.sum(left_region > 0) / max(left_region.size, 1)
+        right_fill = np.sum(right_region > 0) / max(right_region.size, 1)
+
+        if top_fill > min_fill:
+            sides += 1
+        if bottom_fill > min_fill:
+            sides += 1
+        if left_fill > min_fill:
+            sides += 1
+        if right_fill > min_fill:
+            sides += 1
+
+        # Sanity check: a single straight line (horizontal or vertical)
+        # should count as 1
+        aspect = w / max(h, 1)
+        if sides == 0:
+            # Maybe it's a thin mark that doesn't fill edges well
+            if aspect > 2.5:
+                return 1  # Horizontal line
+            elif aspect < 0.4:
+                return 1  # Vertical line
+
+        return sides if sides > 0 else None
+
+    def looks_like_tally(self, cell_img: np.ndarray) -> bool:
+        """Quick check: does this cell likely contain tally marks rather than text?
+
+        Tally marks tend to have:
+        - Few connected components (1-5 squares max)
+        - Relatively low ink density
+        - Components that are roughly square-ish
+        """
+        if len(cell_img.shape) == 3:
+            gray = cv2.cvtColor(cell_img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = cell_img.copy()
+
+        _, binary = cv2.threshold(gray, 0, 255,
+                                  cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        ink_ratio = np.sum(binary > 0) / binary.size
+
+        # Tally marks are sparse (not dense text)
+        if ink_ratio > 0.35:
+            return False
+        if ink_ratio < 0.005:
+            return False  # Empty
+
+        num_labels, _, stats, _ = cv2.connectedComponentsWithStats(
+            binary, connectivity=8
+        )
+
+        # Count significant components
+        significant = 0
+        for i in range(1, num_labels):
+            if stats[i, cv2.CC_STAT_AREA] > 15:
+                significant += 1
+
+        # Tally marks: typically 1-8 components (1-8 square groups)
+        # Text: usually many more small components
+        return significant <= 10
+
+
+# ---------------------------------------------------------------------------
 # OCR Engine
 # ---------------------------------------------------------------------------
 
@@ -680,6 +850,7 @@ class HandwritingToExcel:
         self.preprocessor = ImagePreprocessor(enhance_level=enhance_level)
         self.ocr = OCREngine(engine=engine, languages=languages)
         self.grid_detector = GridDetector()
+        self.tally_detector = TallyMarkDetector()
         self.table_detector = TableStructureDetector()
         self.line_extractor = LineExtractor()
         self.exporter = ExcelExporter()
@@ -730,7 +901,12 @@ class HandwritingToExcel:
 
     def _ocr_grid_cells(self, img: np.ndarray,
                          cells: list[CellBBox]) -> list[list[str]]:
-        """Crop each cell from image, preprocess, and OCR individually."""
+        """Crop each cell from image, preprocess, and OCR individually.
+
+        For each cell, first tries tally mark detection (quadradinhos).
+        If the cell looks like tally marks, returns the numeric count.
+        Otherwise falls back to OCR for text content.
+        """
         if not cells:
             return [[]]
 
@@ -741,6 +917,9 @@ class HandwritingToExcel:
         # Shrink margin: crop slightly inside the cell to avoid grid lines
         margin_x = 4
         margin_y = 3
+
+        # First pass: OCR the header row to identify text vs numeric columns
+        # (we'll use tally detection on all non-header cells heuristically)
 
         for cell in cells:
             # Crop cell from original image
@@ -757,10 +936,18 @@ class HandwritingToExcel:
             if cell_img.size == 0:
                 continue
 
-            # Preprocess individual cell
-            processed = self.preprocessor.preprocess_cell(cell_img)
+            # --- Strategy: try tally marks first on non-header rows ---
+            # Header row (row 0) always uses OCR
+            if cell.row > 0 and self.tally_detector.looks_like_tally(cell_img):
+                tally_count = self.tally_detector.detect(cell_img)
+                if tally_count is not None:
+                    # 0 means empty cell, show as empty
+                    table[cell.row][cell.col] = str(tally_count) if tally_count > 0 else ""
+                    logger.debug(f"Cell [{cell.row},{cell.col}]: tally={tally_count}")
+                    continue
 
-            # OCR the cell
+            # --- Fallback: OCR for text cells ---
+            processed = self.preprocessor.preprocess_cell(cell_img)
             text = self.ocr.ocr_cell(processed)
 
             # Also try on grayscale version if no text found
